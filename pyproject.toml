@@ -10,6 +10,7 @@ dependencies = [
     "pydantic-settings>=2.14.1",
     "python-dotenv>=1.2.2",
     "sqlalchemy>=2.0.49",
+    "uuid-utils>=0.15.0",
     "uvicorn[standard]>=0.46.0",
 ]
 
@@ -19,3 +20,11 @@ dev = [
     "pytest>=9.0.3",
     "ruff>=0.15.12",
 ]
+
+[tool.ruff]
+src = ["src", "tests"]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N"]
