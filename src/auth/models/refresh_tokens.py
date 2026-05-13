@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 
 class RefreshToken(Base):
-    """Refresh tokens tied to active user sessions."""
+    """Persisted session record; the raw token lives only on the client."""
 
     __tablename__ = "refresh_tokens"
 

@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 
 class User(Base):
-    """create Hotspot admin account"""
+    """User account: identity, contact, verification, and links to auth methods."""
 
     __tablename__ = "users"
 

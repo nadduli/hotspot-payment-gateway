@@ -1,3 +1,5 @@
+"""Request and response schemas for the auth API."""
+
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -15,7 +17,7 @@ from src.auth.utils import normalize_email, validate_password_strength
 
 
 class SignupRequest(BaseModel):
-    """schema for the signup request"""
+    """New-account payload. Email is normalized to lowercase before storage."""
 
     first_name: str = Field(
         ...,
@@ -70,7 +72,7 @@ class SignupRequest(BaseModel):
 
 
 class ResetPasswordRequest(BaseModel):
-    """Schema for resetting a user's password with reset token"""
+    """Password reset payload; consumes a one-time token sent by email."""
 
     token: str = Field(
         ...,
@@ -109,7 +111,7 @@ class ResetPasswordRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    """Schema for the login request payload."""
+    """Email + password login payload. Email lookup is case-insensitive."""
 
     email: EmailStr = Field(
         ...,
@@ -130,7 +132,7 @@ class LoginRequest(BaseModel):
 
 
 class ForgotPasswordRequest(BaseModel):
-    """Schema for the forgot password request payload."""
+    """Request a password-reset link by email."""
 
     email: EmailStr = Field(
         ...,
@@ -145,7 +147,7 @@ class ForgotPasswordRequest(BaseModel):
 
 
 class UserResponse(BaseModel):
-    """Schema for the user details returned upon signup."""
+    """Public-facing user representation. Never includes password_hash or tokens."""
 
     model_config = ConfigDict(from_attributes=True, arbitrary_types_allowed=True)
 
@@ -201,12 +203,12 @@ class UserResponse(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    """Schema for a successful login response."""
+    """Successful authentication response: short-lived access token and user."""
 
     access_token: str = Field(
         ...,
         description="Valid JWT access token issued on login.",
-        json_schema_extra={"example": "eyJhbGciOiJIIsInR5cCI6IkpXVCJ9.ey..."},
+        json_schema_extra={"example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ey..."},
     )
     user: UserResponse = Field(
         ...,
@@ -215,7 +217,7 @@ class LoginResponse(BaseModel):
 
 
 class VerifyEmailRequest(BaseModel):
-    """Schema for the email verification request payload."""
+    """Confirm an email address using the one-time token sent at signup."""
 
     token: str = Field(
         ...,
@@ -226,10 +228,10 @@ class VerifyEmailRequest(BaseModel):
 
 
 class RefreshResponse(BaseModel):
-    """Schema for a successful token refresh response."""
+    """New access token issued from a refresh-cookie exchange."""
 
     access_token: str = Field(
         ...,
         description="Valid JWT access token issued on refresh.",
-        json_schema_extra={"example": "eyJhbGciOiJIIsInR5cCI6IkpXVCJ9.ey..."},
+        json_schema_extra={"example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ey..."},
     )

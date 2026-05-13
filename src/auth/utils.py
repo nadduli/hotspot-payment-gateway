@@ -2,7 +2,8 @@ import re
 
 
 def validate_password_strength(val: str) -> str:
-    """Validate that a password meets strength requirements."""
+    """Enforce length and character-class rules; return val unchanged on success."""
+    # bcrypt truncates above 72 bytes; reject rather than silently truncate.
     if len(val.encode("utf-8")) > 72:
         raise ValueError("Password must be at most 72 bytes long")
     if len(val) < 8:
@@ -19,5 +20,5 @@ def validate_password_strength(val: str) -> str:
 
 
 def normalize_email(val: str) -> str:
-    """Lowercase and trim an email address for consistent storage and lookup."""
+    """Lowercase and strip whitespace for consistent storage and lookup."""
     return val.strip().lower()

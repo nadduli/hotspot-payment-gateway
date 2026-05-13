@@ -1,10 +1,12 @@
+"""Generic response envelopes shared across endpoints."""
+
 from typing import Literal
 
 from pydantic import BaseModel
 
 
 class SuccessResponse[DataT](BaseModel):
-    """Standardized success response schema."""
+    """Generic success envelope; `data` carries the typed payload."""
 
     status: Literal["success"] = "success"
     message: str
@@ -12,7 +14,7 @@ class SuccessResponse[DataT](BaseModel):
 
 
 class ErrorResponse(BaseModel):
-    """Standardized error response schema."""
+    """Generic error envelope with a human-readable message."""
 
     status: Literal["error"] = "error"
     message: str

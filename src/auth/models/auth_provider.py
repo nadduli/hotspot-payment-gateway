@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 
 class AuthProvider(Base):
-    """tracks user authentication providers linked to a user account"""
+    """A linked authentication method for a user (password, google, etc.)."""
 
     __tablename__ = "auth_providers"
     __table_args__ = (
