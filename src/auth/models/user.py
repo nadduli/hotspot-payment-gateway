@@ -17,6 +17,7 @@ from src.models import Base
 if TYPE_CHECKING:
     from .auth_provider import AuthProvider
     from .refresh_tokens import RefreshToken
+    from .verification_token import VerificationToken
 
 
 class User(Base):
@@ -44,6 +45,11 @@ class User(Base):
     )
 
     refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+    verification_tokens: Mapped[list["VerificationToken"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
     )

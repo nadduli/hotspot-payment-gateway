@@ -1,4 +1,4 @@
-"""JWT access tokens and SHA-256-hashed opaque refresh tokens."""
+"""JWT access tokens, plus opaque (SHA-256-hashed) refresh and verification tokens."""
 
 import hashlib
 import secrets
@@ -47,14 +47,25 @@ def decode_access_token(token: str) -> dict[str, Any]:
     return payload
 
 
-# SHA-256, not bcrypt: the token is 512 random bits so hash speed is irrelevant,
-# and we verify on every API call so it needs to be cheap.
+def hash_token(raw: str) -> str:
+    """Return the SHA-256 hex digest of an opaque token."""
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+# SHA-256, not bcrypt: opaque tokens carry full random entropy, so hash speed
+# is irrelevant — and they're verified on every relevant request.
 def generate_refresh_token() -> tuple[str, str]:
     """Generate a new refresh token. Returns (raw, sha256_hex_hash)."""
     raw = secrets.token_urlsafe(64)
-    return raw, hash_refresh_token(raw)
+    return raw, hash_token(raw)
+
+
+def generate_verification_token() -> tuple[str, str]:
+    """Generate an email-verification / password-reset token. Returns (raw, hash)."""
+    raw = secrets.token_urlsafe(48)
+    return raw, hash_token(raw)
 
 
 def hash_refresh_token(raw: str) -> str:
     """Return the SHA-256 hex digest of a raw refresh token."""
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return hash_token(raw)

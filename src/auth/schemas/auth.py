@@ -227,6 +227,21 @@ class VerifyEmailRequest(BaseModel):
     )
 
 
+class ResendVerificationRequest(BaseModel):
+    """Request a fresh email-verification link by email address."""
+
+    email: EmailStr = Field(
+        ...,
+        description="The email address awaiting verification.",
+        json_schema_extra={"example": "jane@example.com"},
+    )
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _normalize_email(cls, val: Any) -> Any:
+        return normalize_email(val) if isinstance(val, str) else val
+
+
 class RefreshResponse(BaseModel):
     """New access token issued from a refresh-cookie exchange."""
 

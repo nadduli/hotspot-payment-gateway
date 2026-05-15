@@ -67,9 +67,8 @@ async def test_google_callback_links_to_existing_password_account(client, mock_g
         },
     )
     assert r.status_code == 201
-    user_id_before = r.json()["user"]["id"]
-    assert r.json()["user"]["is_email_verified"] is False
-    client.cookies.clear()
+    user_id_before = r.json()["id"]
+    assert r.json()["is_email_verified"] is False
 
     mock_google_userinfo(sub="g-bob", email="bob@example.com", given_name="Bob")
     r = await client.get("/api/v1/auth/google/callback", follow_redirects=False)

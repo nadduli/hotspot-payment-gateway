@@ -5,12 +5,12 @@ class EmailConflictError(Exception):
     """Raised when registering with an email that already exists."""
 
 
-class EmailDeliveryError(Exception):
-    """Raised when an outbound email (verification, reset) fails to send."""
-
-
 class InvalidPasswordResetTokenError(Exception):
     """Raised for a missing, expired, or already-used password reset token."""
+
+
+class InvalidVerificationTokenError(Exception):
+    """Raised for a missing, expired, or already-used email verification token."""
 
 
 class AccountLockedError(Exception):
@@ -22,7 +22,7 @@ class InvalidCredentialsError(Exception):
 
 
 class EmailNotVerifiedError(Exception):
-    """Raised when an unverified user attempts a verified-only action."""
+    """Raised when an unverified user attempts to log in."""
 
 
 class InvalidRefreshTokenError(Exception):

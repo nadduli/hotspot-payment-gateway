@@ -27,6 +27,12 @@ class AuthConfig(BaseSettings):
     # Frontend route the OAuth callback bounces to; errors append ?error=...
     frontend_oauth_callback_uri: str = "http://localhost:3000/auth/callback"
 
+    # Token lifetimes and the frontend routes their email links point at.
+    email_verify_token_ttl_hours: int = 24
+    password_reset_token_ttl_minutes: int = 30
+    frontend_verify_email_url: str = "http://localhost:3000/verify-email"
+    frontend_reset_password_url: str = "http://localhost:3000/reset-password"
+
 
 @lru_cache
 def get_auth_settings() -> AuthConfig:

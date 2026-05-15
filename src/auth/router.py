@@ -1,5 +1,6 @@
-"""Auth API: signup, login, refresh, logout, /me, Google OAuth."""
+"""Auth API: signup, login, refresh, logout, /me, Google OAuth, email flows."""
 
+from contextlib import suppress
 from datetime import timedelta
 
 from authlib.integrations.base_client.errors import OAuthError
@@ -11,21 +12,37 @@ from src.auth.config import get_auth_settings
 from src.auth.dependencies import CurrentUser
 from src.auth.exceptions import (
     EmailConflictError,
+    EmailNotVerifiedError,
     GoogleOAuthError,
     InvalidCredentialsError,
+    InvalidPasswordResetTokenError,
     InvalidRefreshTokenError,
+    InvalidVerificationTokenError,
 )
 from src.auth.models import User
 from src.auth.oauth import oauth
 from src.auth.schemas import (
+    ForgotPasswordRequest,
     LoginRequest,
     LoginResponse,
     RefreshResponse,
+    ResendVerificationRequest,
+    ResetPasswordRequest,
     SignupRequest,
     UserResponse,
+    VerifyEmailRequest,
 )
 from src.auth.tokens import encode_access_token
+from src.core.rate_limit import (
+    EMAIL_REQUEST_RATE_LIMIT,
+    LOGIN_RATE_LIMIT,
+    OAUTH_RATE_LIMIT,
+    REFRESH_RATE_LIMIT,
+    SIGNUP_RATE_LIMIT,
+    limiter,
+)
 from src.database import DbSession
+from src.integrations.email import EmailDeliveryError
 
 router = APIRouter()
 
@@ -69,11 +86,7 @@ def _frontend_redirect(error: str | None = None) -> RedirectResponse:
     return RedirectResponse(url=url, status_code=status.HTTP_302_FOUND)
 
 
-async def _complete_login(
-    db: DbSession,
-    response: Response,
-    user: User,
-) -> LoginResponse:
+async def _complete_login(db: DbSession, response: Response, user: User) -> LoginResponse:
     raw_refresh, _ = await service.issue_refresh_token(db, user)
     _set_refresh_cookie(response, raw_refresh)
     return LoginResponse(
@@ -84,42 +97,46 @@ async def _complete_login(
 
 @router.post(
     "/signup",
-    response_model=LoginResponse,
+    response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def signup(
-    body: SignupRequest,
-    response: Response,
-    db: DbSession,
-) -> LoginResponse:
-    """Register a new password account; return access token + refresh cookie."""
+@limiter.limit(SIGNUP_RATE_LIMIT)
+async def signup(request: Request, body: SignupRequest, db: DbSession) -> UserResponse:
+    """Register a new account and email a verification link.
+
+    The account starts unverified; login is blocked until the email is confirmed.
+    """
     try:
         user = await service.create_user(db, body)
     except EmailConflictError as e:
         raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
-    return await _complete_login(db, response, user)
+    # The account exists regardless; /verify-email/request is the retry path.
+    with suppress(EmailDeliveryError):
+        await service.request_email_verification(db, user)
+    return UserResponse.model_validate(user)
 
 
 @router.post("/login", response_model=LoginResponse)
+@limiter.limit(LOGIN_RATE_LIMIT)
 async def login(
+    request: Request,
     body: LoginRequest,
     response: Response,
     db: DbSession,
 ) -> LoginResponse:
-    """Authenticate with email and password."""
+    """Authenticate with email and password. Requires a verified email."""
     try:
         user = await service.authenticate(db, body.email, body.password)
     except InvalidCredentialsError as e:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(e)) from e
+    except EmailNotVerifiedError as e:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(e)) from e
     return await _complete_login(db, response, user)
 
 
 @router.post("/refresh", response_model=RefreshResponse)
-async def refresh(
-    request: Request,
-    response: Response,
-    db: DbSession,
-) -> RefreshResponse:
+@limiter.limit(REFRESH_RATE_LIMIT)
+async def refresh(request: Request, response: Response, db: DbSession) -> RefreshResponse:
     """Rotate the refresh cookie and return a new access token."""
     raw = _read_refresh_cookie(request)
     if raw is None:
@@ -133,11 +150,7 @@ async def refresh(
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout(
-    request: Request,
-    response: Response,
-    db: DbSession,
-) -> None:
+async def logout(request: Request, response: Response, db: DbSession) -> None:
     """Revoke the active refresh token and clear the cookie."""
     raw = _read_refresh_cookie(request)
     if raw is not None:
@@ -151,7 +164,69 @@ async def me(current_user: CurrentUser) -> UserResponse:
     return UserResponse.model_validate(current_user)
 
 
+@router.post("/verify-email", response_model=UserResponse)
+@limiter.limit(OAUTH_RATE_LIMIT)
+async def verify_email(
+    request: Request,
+    body: VerifyEmailRequest,
+    db: DbSession,
+) -> UserResponse:
+    """Confirm an email address using the token sent at signup."""
+    try:
+        user = await service.verify_email(db, body.token)
+    except InvalidVerificationTokenError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+    return UserResponse.model_validate(user)
+
+
+@router.post("/verify-email/request", status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit(EMAIL_REQUEST_RATE_LIMIT)
+async def resend_verification(
+    request: Request,
+    body: ResendVerificationRequest,
+    db: DbSession,
+) -> None:
+    """Resend the verification link.
+
+    Always 202 — never reveals whether the account exists or is already verified.
+    """
+    user = await service.get_user_by_email(db, body.email)
+    if user is not None and not user.is_email_verified:
+        with suppress(EmailDeliveryError):
+            await service.request_email_verification(db, user)
+
+
+@router.post("/forgot-password", status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit(EMAIL_REQUEST_RATE_LIMIT)
+async def forgot_password(
+    request: Request,
+    body: ForgotPasswordRequest,
+    db: DbSession,
+) -> None:
+    """Email a password-reset link.
+
+    Always 202 — never reveals whether the account exists.
+    """
+    with suppress(EmailDeliveryError):
+        await service.request_password_reset(db, body.email)
+
+
+@router.post("/reset-password", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit(OAUTH_RATE_LIMIT)
+async def reset_password(
+    request: Request,
+    body: ResetPasswordRequest,
+    db: DbSession,
+) -> None:
+    """Set a new password using a reset token; revokes all existing sessions."""
+    try:
+        await service.reset_password(db, body.token, body.new_password)
+    except InvalidPasswordResetTokenError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+
+
 @router.get("/google/login")
+@limiter.limit(OAUTH_RATE_LIMIT)
 async def google_login(request: Request) -> RedirectResponse:
     """Redirect the browser to Google's OAuth consent screen."""
     settings = get_auth_settings()
@@ -164,6 +239,7 @@ async def google_login(request: Request) -> RedirectResponse:
 
 
 @router.get("/google/callback")
+@limiter.limit(OAUTH_RATE_LIMIT)
 async def google_callback(request: Request, db: DbSession) -> RedirectResponse:
     """Complete Google OAuth: link or create user, set refresh cookie, redirect to frontend."""
     try:
