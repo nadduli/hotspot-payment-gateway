@@ -1,10 +1,9 @@
 """Auth API: signup, login, refresh, logout, /me, Google OAuth, email flows."""
 
-from contextlib import suppress
 from datetime import timedelta
 
 from authlib.integrations.base_client.errors import OAuthError
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 
 from src.auth import service
@@ -42,7 +41,6 @@ from src.core.rate_limit import (
     limiter,
 )
 from src.database import DbSession
-from src.integrations.email import EmailDeliveryError
 
 router = APIRouter()
 
@@ -101,18 +99,23 @@ async def _complete_login(db: DbSession, response: Response, user: User) -> Logi
     status_code=status.HTTP_201_CREATED,
 )
 @limiter.limit(SIGNUP_RATE_LIMIT)
-async def signup(request: Request, body: SignupRequest, db: DbSession) -> UserResponse:
+async def signup(
+    request: Request,
+    body: SignupRequest,
+    db: DbSession,
+    background_tasks: BackgroundTasks,
+) -> UserResponse:
     """Register a new account and email a verification link.
 
     The account starts unverified; login is blocked until the email is confirmed.
+    The verification email is sent after the response — /verify-email/request
+    is the retry path if delivery fails.
     """
     try:
         user = await service.create_user(db, body)
     except EmailConflictError as e:
         raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
-    # The account exists regardless; /verify-email/request is the retry path.
-    with suppress(EmailDeliveryError):
-        await service.request_email_verification(db, user)
+    await service.request_email_verification(db, user, background_tasks)
     return UserResponse.model_validate(user)
 
 
@@ -185,6 +188,7 @@ async def resend_verification(
     request: Request,
     body: ResendVerificationRequest,
     db: DbSession,
+    background_tasks: BackgroundTasks,
 ) -> None:
     """Resend the verification link.
 
@@ -192,8 +196,7 @@ async def resend_verification(
     """
     user = await service.get_user_by_email(db, body.email)
     if user is not None and not user.is_email_verified:
-        with suppress(EmailDeliveryError):
-            await service.request_email_verification(db, user)
+        await service.request_email_verification(db, user, background_tasks)
 
 
 @router.post("/forgot-password", status_code=status.HTTP_202_ACCEPTED)
@@ -202,13 +205,13 @@ async def forgot_password(
     request: Request,
     body: ForgotPasswordRequest,
     db: DbSession,
+    background_tasks: BackgroundTasks,
 ) -> None:
     """Email a password-reset link.
 
     Always 202 — never reveals whether the account exists.
     """
-    with suppress(EmailDeliveryError):
-        await service.request_password_reset(db, body.email)
+    await service.request_password_reset(db, body.email, background_tasks)
 
 
 @router.post("/reset-password", status_code=status.HTTP_204_NO_CONTENT)

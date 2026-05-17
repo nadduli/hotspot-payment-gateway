@@ -4,9 +4,8 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from uuid_utils import uuid7
 
-from src.models import Base
+from src.models import Base, uuid7_pk
 
 if TYPE_CHECKING:
     from .user import User
@@ -17,7 +16,7 @@ class VerificationToken(Base):
 
     __tablename__ = "verification_tokens"
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7_pk)
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )

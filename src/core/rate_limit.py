@@ -13,6 +13,9 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from src.core.config import get_settings
+from src.core.logging import get_logger
+
+log = get_logger(__name__)
 
 # Per-route limits. These guard the auth surface, which is admin-facing —
 # if this ever serves end users behind a hotspot's shared NAT, revisit the
@@ -40,6 +43,12 @@ limiter = Limiter(
 
 def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> Response:
     """Return a 429 in the API's standard {"detail": ...} shape, with Retry-After."""
+    log.warning(
+        "rate_limit.exceeded",
+        path=request.url.path,
+        client=_client_ip(request),
+        limit=str(exc.detail),
+    )
     response = JSONResponse(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         content={"detail": "Too many requests. Please try again later."},

@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     # "memory://" for dev; a redis:// URL in production so limits are shared.
     rate_limit_storage_uri: str = "memory://"
 
+    # Logging. "console" for dev (colored, human-readable), "json" for prod aggregators.
+    log_level: str = "INFO"
+    log_format: str = "console"
+
     # SMTP — Mailtrap sandbox in development.
     smtp_host: str = "sandbox.smtp.mailtrap.io"
     smtp_port: int = 2525

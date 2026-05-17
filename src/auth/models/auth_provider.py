@@ -11,9 +11,8 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from uuid_utils import uuid7
 
-from src.models import Base
+from src.models import Base, uuid7_pk
 
 if TYPE_CHECKING:
     from .user import User
@@ -32,7 +31,7 @@ class AuthProvider(Base):
         ),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7_pk)
     provider: Mapped[str] = mapped_column(String(50))
     provider_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     user_id: Mapped[uuid.UUID] = mapped_column(

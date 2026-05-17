@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+from fastapi import BackgroundTasks
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,8 +28,11 @@ from src.auth.tokens import (
     hash_token,
 )
 from src.auth.utils import normalize_email
+from src.core.logging import get_logger
 from src.core.security import hash_password, verify_password
-from src.integrations.email import send_email
+from src.integrations.email import EmailDeliveryError, send_email
+
+log = get_logger(__name__)
 
 PURPOSE_EMAIL_VERIFY = "email_verify"
 PURPOSE_PASSWORD_RESET = "password_reset"
@@ -71,8 +75,10 @@ async def create_user(session: AsyncSession, signup: SignupRequest) -> User:
     except IntegrityError as e:
         # ix_users_email is the unique constraint; no pre-check, avoids TOCTOU
         await session.rollback()
+        log.info("auth.signup.conflict", email=signup.email)
         raise EmailConflictError("Email already registered") from e
     await session.refresh(user)
+    log.info("auth.signup", user_id=str(user.id))
     return user
 
 
@@ -86,11 +92,19 @@ async def authenticate(session: AsyncSession, email: str, password: str) -> User
     """
     user = await session.scalar(select(User).where(User.email == email))
     if user is None or user.password_hash is None:
+        log.info("auth.login.failed", email=email, reason="unknown_or_oauth_only")
         raise InvalidCredentialsError("Invalid email or password")
     if not verify_password(password, user.password_hash):
+        log.info(
+            "auth.login.failed",
+            user_id=str(user.id),
+            reason="wrong_password",
+        )
         raise InvalidCredentialsError("Invalid email or password")
     if not user.is_email_verified:
+        log.info("auth.login.unverified", user_id=str(user.id))
         raise EmailNotVerifiedError("Email address is not verified")
+    log.info("auth.login.success", user_id=str(user.id))
     return user
 
 
@@ -156,6 +170,7 @@ async def rotate_refresh_token(session: AsyncSession, raw_token: str) -> tuple[s
     await session.commit()
 
     access_token = encode_access_token(user.id)
+    log.info("auth.token.rotated", user_id=str(user.id))
     return access_token, new_raw, user
 
 
@@ -189,7 +204,6 @@ async def link_or_create_google_user(
     """
     email = normalize_email(email)
 
-    # 1. known Google sub
     google_provider = await session.scalar(
         select(AuthProvider).where(
             AuthProvider.provider == "google",
@@ -200,9 +214,9 @@ async def link_or_create_google_user(
         user = await session.get(User, google_provider.user_id)
         if user is None:
             raise GoogleOAuthError("Account no longer exists")
+        log.info("auth.google.relogin", user_id=str(user.id))
         return user
 
-    # 2. email already exists; attach Google to that account
     existing = await session.scalar(select(User).where(User.email == email))
     if existing is not None:
         session.add(
@@ -217,9 +231,9 @@ async def link_or_create_google_user(
         existing.is_email_verified = True
         await session.commit()
         await session.refresh(existing)
+        log.info("auth.google.linked", user_id=str(existing.id))
         return existing
 
-    # 3. fresh user; Google has verified the email so we trust it
     new_user = User(
         first_name=first_name,
         last_name=last_name,
@@ -242,6 +256,7 @@ async def link_or_create_google_user(
         await session.rollback()
         raise GoogleOAuthError("Account creation failed") from e
     await session.refresh(new_user)
+    log.info("auth.google.signup", user_id=str(new_user.id))
     return new_user
 
 
@@ -269,8 +284,29 @@ async def _consume_token(
     return token
 
 
-async def request_email_verification(session: AsyncSession, user: User) -> None:
-    """Issue an email-verification token and email the verification link."""
+async def _safe_send_email(to: str, subject: str, body: str) -> None:
+    """Background-task wrapper that logs delivery failures instead of crashing.
+
+    Exceptions raised inside a BackgroundTask are eaten by the ASGI cycle, so
+    we catch + log explicitly to keep failures visible in the audit log.
+    """
+    try:
+        await send_email(to=to, subject=subject, body=body)
+    except EmailDeliveryError as e:
+        log.warning("email.delivery_failed", to=to, reason=str(e))
+
+
+async def request_email_verification(
+    session: AsyncSession,
+    user: User,
+    background_tasks: BackgroundTasks,
+) -> None:
+    """Issue an email-verification token and queue the link for delivery.
+
+    SMTP is slow; queueing the send keeps signup snappy. The token is committed
+    before the response goes out, so a failed delivery is recoverable via
+    /verify-email/request.
+    """
     settings = get_auth_settings()
     raw, token_hash = generate_verification_token()
     session.add(
@@ -283,11 +319,13 @@ async def request_email_verification(session: AsyncSession, user: User) -> None:
     )
     await session.commit()
     link = f"{settings.frontend_verify_email_url}?token={raw}"
-    await send_email(
+    background_tasks.add_task(
+        _safe_send_email,
         to=user.email,
         subject="Verify your email address",
         body=f"Confirm your email to activate your account:\n\n{link}",
     )
+    log.info("auth.verification.requested", user_id=str(user.id))
 
 
 async def verify_email(session: AsyncSession, raw_token: str) -> User:
@@ -306,11 +344,16 @@ async def verify_email(session: AsyncSession, raw_token: str) -> User:
     token.used_at = datetime.now(UTC)
     await session.commit()
     await session.refresh(user)
+    log.info("auth.verification.completed", user_id=str(user.id))
     return user
 
 
-async def request_password_reset(session: AsyncSession, email: str) -> None:
-    """Issue a password-reset token and email the reset link.
+async def request_password_reset(
+    session: AsyncSession,
+    email: str,
+    background_tasks: BackgroundTasks,
+) -> None:
+    """Issue a password-reset token and queue the link for delivery.
 
     No-ops silently when the email matches no account, so callers can return
     an identical response either way (no account enumeration).
@@ -331,11 +374,13 @@ async def request_password_reset(session: AsyncSession, email: str) -> None:
     )
     await session.commit()
     link = f"{settings.frontend_reset_password_url}?token={raw}"
-    await send_email(
+    background_tasks.add_task(
+        _safe_send_email,
         to=user.email,
         subject="Reset your password",
         body=f"Reset your password using this link:\n\n{link}",
     )
+    log.info("auth.password_reset.requested", user_id=str(user.id))
 
 
 async def reset_password(session: AsyncSession, raw_token: str, new_password: str) -> None:
@@ -357,3 +402,4 @@ async def reset_password(session: AsyncSession, raw_token: str, new_password: st
         update(RefreshToken).where(RefreshToken.user_id == user.id).values(is_revoked=True)
     )
     await session.commit()
+    log.info("auth.password_reset.completed", user_id=str(user.id))
