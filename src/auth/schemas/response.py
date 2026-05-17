@@ -1,8 +1,10 @@
 """Generic response envelopes shared across endpoints."""
 
-from typing import Literal
+from typing import Literal, TypeVar
 
 from pydantic import BaseModel
+
+DataT = TypeVar("DataT")
 
 
 class SuccessResponse[DataT](BaseModel):

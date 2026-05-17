@@ -43,6 +43,14 @@ def _as_utc(dt: datetime) -> datetime:
     return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
 
 
+def _mask_email(value: str) -> str:
+    local, sep, domain = value.partition("@")
+    if not sep:
+        return value
+    masked_local = local[0] + "***" if local else "***"
+    return f"{masked_local}@{domain}"
+
+
 def _build_refresh_token(user_id: UUID) -> tuple[str, RefreshToken]:
     settings = get_auth_settings()
     raw, token_hash = generate_refresh_token()
@@ -75,7 +83,7 @@ async def create_user(session: AsyncSession, signup: SignupRequest) -> User:
     except IntegrityError as e:
         # ix_users_email is the unique constraint; no pre-check, avoids TOCTOU
         await session.rollback()
-        log.info("auth.signup.conflict", email=signup.email)
+        log.info("auth.signup.conflict", email=_mask_email(signup.email))
         raise EmailConflictError("Email already registered") from e
     await session.refresh(user)
     log.info("auth.signup", user_id=str(user.id))
@@ -92,7 +100,7 @@ async def authenticate(session: AsyncSession, email: str, password: str) -> User
     """
     user = await session.scalar(select(User).where(User.email == email))
     if user is None or user.password_hash is None:
-        log.info("auth.login.failed", email=email, reason="unknown_or_oauth_only")
+        log.info("auth.login.failed", email=_mask_email(email), reason="unknown_or_oauth_only")
         raise InvalidCredentialsError("Invalid email or password")
     if not verify_password(password, user.password_hash):
         log.info(
@@ -294,6 +302,13 @@ async def _safe_send_email(to: str, subject: str, body: str) -> None:
         await send_email(to=to, subject=subject, body=body)
     except EmailDeliveryError as e:
         log.warning("email.delivery_failed", to=to, reason=str(e))
+    except Exception as e:
+        log.exception(
+            "email.delivery_failed_unexpected",
+            to=to,
+            subject=subject,
+            reason=str(e),
+        )
 
 
 async def request_email_verification(
