@@ -55,22 +55,31 @@ def upgrade() -> None:
     )
 
     connection = op.get_bind()
-    rows = connection.execute(
+    result = connection.execute(
         sa.text(
             "SELECT id, mikrotik_username, mikrotik_password FROM transactions"
         )
     )
-    for row in rows:
+
+    batch_size = 500
+    while True:
+        rows = result.fetchmany(batch_size)
+        if not rows:
+            break
+        params = [
+            {
+                "id": row.id,
+                "username_enc": encrypt_value(row.mikrotik_username),
+                "password_enc": encrypt_value(row.mikrotik_password),
+            }
+            for row in rows
+        ]
         connection.execute(
             sa.text(
                 "UPDATE transactions SET mikrotik_username_enc = :username_enc, "
                 "mikrotik_password_enc = :password_enc WHERE id = :id"
             ),
-            {
-                "id": row.id,
-                "username_enc": encrypt_value(row.mikrotik_username),
-                "password_enc": encrypt_value(row.mikrotik_password),
-            },
+            params,
         )
 
     op.drop_column("transactions", "mikrotik_username")
@@ -105,22 +114,31 @@ def downgrade() -> None:
     )
 
     connection = op.get_bind()
-    rows = connection.execute(
+    result = connection.execute(
         sa.text(
             "SELECT id, mikrotik_username_enc, mikrotik_password_enc FROM transactions"
         )
     )
-    for row in rows:
+
+    batch_size = 500
+    while True:
+        rows = result.fetchmany(batch_size)
+        if not rows:
+            break
+        params = [
+            {
+                "id": row.id,
+                "username": decrypt_value(row.mikrotik_username_enc),
+                "password": decrypt_value(row.mikrotik_password_enc),
+            }
+            for row in rows
+        ]
         connection.execute(
             sa.text(
                 "UPDATE transactions SET mikrotik_username = :username, "
                 "mikrotik_password = :password WHERE id = :id"
             ),
-            {
-                "id": row.id,
-                "username": decrypt_value(row.mikrotik_username_enc),
-                "password": decrypt_value(row.mikrotik_password_enc),
-            },
+            params,
         )
 
     op.drop_column("transactions", "mikrotik_username_enc")
