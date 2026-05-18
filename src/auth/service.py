@@ -31,6 +31,7 @@ from src.auth.utils import normalize_email
 from src.core.logging import get_logger
 from src.core.security import hash_password, verify_password
 from src.integrations.email import EmailDeliveryError, send_email
+from src.tenant.constants import DEFAULT_TENANT_ID
 
 log = get_logger(__name__)
 
@@ -71,6 +72,7 @@ async def create_user(session: AsyncSession, signup: SignupRequest) -> User:
         EmailConflictError: the email is already registered.
     """
     user = User(
+        tenant_id=DEFAULT_TENANT_ID,
         first_name=signup.first_name,
         last_name=signup.last_name,
         email=signup.email,
@@ -83,7 +85,11 @@ async def create_user(session: AsyncSession, signup: SignupRequest) -> User:
     except IntegrityError as e:
         # ix_users_email is the unique constraint; no pre-check, avoids TOCTOU
         await session.rollback()
-        log.info("auth.signup.conflict", email=_mask_email(signup.email))
+        log.info(
+            "auth.signup.conflict",
+            email=_mask_email(signup.email),
+            detail=str(e.orig) if e.orig else str(e),
+        )
         raise EmailConflictError("Email already registered") from e
     await session.refresh(user)
     log.info("auth.signup", user_id=str(user.id))
@@ -243,6 +249,7 @@ async def link_or_create_google_user(
         return existing
 
     new_user = User(
+        tenant_id=DEFAULT_TENANT_ID,
         first_name=first_name,
         last_name=last_name,
         email=email,

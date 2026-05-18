@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import (
     Boolean,
     DateTime,
+    ForeignKey,
     String,
     Text,
     func,
@@ -14,6 +15,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.models import Base, uuid7_pk
 
 if TYPE_CHECKING:
+    from src.tenant.models.tenant import Tenant
+
     from .auth_provider import AuthProvider
     from .refresh_tokens import RefreshToken
     from .verification_token import VerificationToken
@@ -25,6 +28,9 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7_pk)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
     first_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
@@ -52,3 +58,5 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+
+    tenant: Mapped["Tenant"] = relationship(back_populates="users")

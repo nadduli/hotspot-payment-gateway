@@ -5,11 +5,13 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
-from src.auth import (
-    models as _auth_models,  # noqa: F401  side-effect: register models on Base.metadata
-)
+from src.audit import models as _audit_models  # noqa: F401  side-effect: register on Base.metadata
+from src.auth import models as _auth_models  # noqa: F401
 from src.core.config import get_settings
+from src.hotspot import models as _hotspot_models  # noqa: F401
 from src.models import Base
+from src.payment import models as _payment_models  # noqa: F401
+from src.tenant import models as _tenant_models  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

@@ -1,3 +1,4 @@
+import structlog.contextvars
 from fastapi import FastAPI
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
@@ -5,8 +6,6 @@ from slowapi.errors import RateLimitExceeded
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
-
-import structlog.contextvars
 
 from src.auth.config import get_auth_settings
 from src.auth.router import router as auth_router
@@ -19,6 +18,7 @@ configure_logging()
 
 app = FastAPI(title="Hotspot Payment Gateway")
 
+
 @app.exception_handler(Exception)
 async def add_request_id_to_errors(request: Request, exc: Exception) -> Response:
     response = await http_exception_handler(request, exc)
@@ -26,6 +26,7 @@ async def add_request_id_to_errors(request: Request, exc: Exception) -> Response
     if request_id:
         response.headers[REQUEST_ID_HEADER] = request_id
     return response
+
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)

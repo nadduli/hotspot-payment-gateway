@@ -1,4 +1,5 @@
 import os
+import tempfile
 from collections.abc import AsyncIterator
 
 import pytest
@@ -7,12 +8,16 @@ from dotenv import load_dotenv
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
-
+from src.audit import models as _audit_models  # noqa: F401  register on Base.metadata
 from src.auth import models as _auth_models  # noqa: F401
 from src.database import get_db
+from src.hotspot import models as _hotspot_models  # noqa: F401
 from src.main import app
 from src.models import Base
+from src.payment import models as _payment_models  # noqa: F401
+from src.tenant import models as _tenant_models  # noqa: F401
+from src.tenant.constants import DEFAULT_TENANT_ID
+from src.tenant.models.tenant import Tenant, TenantStatus
 
 load_dotenv()
 
@@ -40,13 +45,22 @@ def _normalize_db_url(url: str) -> str:
 #   DATABASE_TEST_URL=postgres://… -> Neon branch (slow, full confidence)
 USE_SQLITE = os.environ.get("PYTEST_SQLITE") == "1"
 _raw_test_url = os.environ.get("DATABASE_TEST_URL")
+# Disposable file path used only when USE_SQLITE; cleaned in test_engine teardown.
+# `:memory:` was tempting but combining it with async_sessionmaker + StaticPool
+# turned out flaky — different sessions occasionally saw different snapshots
+# even on the same loop. A real file resolves it deterministically and is
+# still wall-clock-fast for the suite.
+_SQLITE_FD, _SQLITE_PATH = (
+    tempfile.mkstemp(prefix="hotspot_tests_", suffix=".db") if USE_SQLITE else (None, None)
+)
 if USE_SQLITE:
-    TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+    os.close(_SQLITE_FD)
+    TEST_DATABASE_URL = f"sqlite+aiosqlite:///{_SQLITE_PATH}"
 elif _raw_test_url:
     TEST_DATABASE_URL = _normalize_db_url(_raw_test_url)
 else:
     raise RuntimeError(
-        "Set DATABASE_TEST_URL (Neon branch) or PYTEST_SQLITE=1 (fast in-memory) "
+        "Set DATABASE_TEST_URL (Neon branch) or PYTEST_SQLITE=1 (fast on-disk) "
         "before running the suite."
     )
 
@@ -77,7 +91,6 @@ async def test_engine():
         engine = create_async_engine(
             TEST_DATABASE_URL,
             connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
             echo=False,
         )
 
@@ -99,12 +112,32 @@ async def test_engine():
             await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
 
+    # Seed the default tenant via the ORM — single-tenant Phase A. Using ORM
+    # rather than raw SQL keeps the UUID stored in whichever format
+    # SQLAlchemy's `Uuid` type uses on each backend (hex on SQLite,
+    # native UUID on Postgres); raw SQL with `str(uuid)` mismatches SQLite
+    # and breaks FK enforcement.
+    async with async_sessionmaker(engine, expire_on_commit=False)() as setup:
+        setup.add(
+            Tenant(
+                id=DEFAULT_TENANT_ID,
+                business_name="Default",
+                slug="default",
+                owner_email="admin@example.local",
+                status=TenantStatus.PENDING_SETUP,
+                accent_color="#2E75B6",
+            )
+        )
+        await setup.commit()
+
     yield engine
 
     if not USE_SQLITE:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
     await engine.dispose()
+    if USE_SQLITE and _SQLITE_PATH:
+        os.unlink(_SQLITE_PATH)
 
 
 @pytest_asyncio.fixture
@@ -116,14 +149,15 @@ async def client(test_engine) -> AsyncIterator[AsyncClient]:
         expire_on_commit=False,
     )
 
+    # The seeded default tenant survives across tests; clear everything else.
+    truncatable = [t for t in Base.metadata.sorted_tables if t.name != "tenants"]
     async with session_factory() as setup:
         if USE_SQLITE:
-            # SQLite has no TRUNCATE; delete children before parents.
-            for table in reversed(Base.metadata.sorted_tables):
+            for table in reversed(truncatable):
                 await setup.execute(text(f"DELETE FROM {table.name}"))
-        else:
-            tables = ", ".join(t.name for t in Base.metadata.sorted_tables)
-            await setup.execute(text(f"TRUNCATE {tables} CASCADE"))
+        elif truncatable:
+            names = ", ".join(t.name for t in truncatable)
+            await setup.execute(text(f"TRUNCATE {names} CASCADE"))
         await setup.commit()
 
     async def _get_db_override() -> AsyncIterator[AsyncSession]:
