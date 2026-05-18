@@ -88,7 +88,7 @@ async def create_user(session: AsyncSession, signup: SignupRequest) -> User:
         log.info(
             "auth.signup.conflict",
             email=_mask_email(signup.email),
-            detail=str(e.orig) if e.orig else str(e),
+            detail="unique constraint violation",
         )
         raise EmailConflictError("Email already registered") from e
     await session.refresh(user)

@@ -3,10 +3,11 @@ from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from src.core.encryption import decrypt_value, encrypt_value
 from src.models import Base, uuid7_pk
 
 if TYPE_CHECKING:
@@ -52,8 +53,8 @@ class Transaction(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True
     )
-    plan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("plans.id"))
-    router_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("routers.id"))
+    plan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("plans.id", ondelete="RESTRICT"))
+    router_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("routers.id", ondelete="RESTRICT"))
     phone_number: Mapped[str] = mapped_column(String(15))
     amount_ugx: Mapped[int] = mapped_column(Integer)
     status: Mapped[TransactionStatus] = mapped_column(
@@ -76,8 +77,25 @@ class Transaction(Base):
     )
     relworx_charge_ugx: Mapped[int | None] = mapped_column(Integer, nullable=True)
     mac_address: Mapped[str | None] = mapped_column(String(17), nullable=True)
-    mikrotik_username: Mapped[str | None] = mapped_column(String(80), nullable=True)
-    mikrotik_password: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    mikrotik_username_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mikrotik_password_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    @property
+    def mikrotik_username(self) -> str | None:
+        return decrypt_value(self.mikrotik_username_enc) if self.mikrotik_username_enc else None
+
+    @mikrotik_username.setter
+    def mikrotik_username(self, value: str | None) -> None:
+        self.mikrotik_username_enc = encrypt_value(value) if value is not None else None
+
+    @property
+    def mikrotik_password(self) -> str | None:
+        return decrypt_value(self.mikrotik_password_enc) if self.mikrotik_password_enc else None
+
+    @mikrotik_password.setter
+    def mikrotik_password(self, value: str | None) -> None:
+        self.mikrotik_password_enc = encrypt_value(value) if value is not None else None
+
     # First-time webhook receipt; guards against duplicate processing.
     webhook_received_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
